@@ -1,0 +1,19 @@
+{
+  "name": "market-platform",
+  "private": true,
+  "packageManager": "pnpm@12.3.4",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:e2e": "turbo run test:e2e",
+    "db:up": "docker compose up -d postgres redis"
+  },
+  "devDependencies": {
+    "turbo": "^2.11.10"
+  }
+}

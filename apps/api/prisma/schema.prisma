@@ -1,0 +1,170 @@
+// Convenções: UUIDs, TIMESTAMPTZ em UTC, nomes snake_case no banco.
+// Tabelas com organization_id usam chaves compostas para impedir
+// vínculos entre operadores diferentes no próprio banco.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum PlatformRole {
+  PLATFORM_ADMIN
+}
+
+enum MembershipRole {
+  OPERATOR_OWNER
+  OPERATOR_ADMIN
+  STORE_MANAGER
+  STOCK_OPERATOR
+  ANALYST
+}
+
+enum StoreStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Organization {
+  id        String             @id @default(uuid()) @db.Uuid
+  legalName String             @map("legal_name")
+  tradeName String?            @map("trade_name")
+  /// CNPJ normalizado (14 caracteres, aceita o formato alfanumérico)
+  document  String             @unique @db.VarChar(14)
+  status    OrganizationStatus @default(ACTIVE)
+  createdAt DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  memberships      Membership[]
+  stores           Store[]
+  storeMemberships StoreMembership[]
+
+  @@map("organizations")
+}
+
+model User {
+  id           String        @id @default(uuid()) @db.Uuid
+  name         String
+  /// Sempre armazenado em minúsculas
+  email        String        @unique
+  passwordHash String        @map("password_hash")
+  status       UserStatus    @default(ACTIVE)
+  platformRole PlatformRole? @map("platform_role")
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  memberships   Membership[]
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+model Membership {
+  id             String         @id @default(uuid()) @db.Uuid
+  userId         String         @map("user_id") @db.Uuid
+  organizationId String         @map("organization_id") @db.Uuid
+  role           MembershipRole
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  storeMemberships StoreMembership[]
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@map("memberships")
+}
+
+model Store {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @map("organization_id") @db.Uuid
+  name           String
+  status         StoreStatus @default(ACTIVE)
+  street         String?
+  number         String?
+  complement     String?
+  district       String?
+  city           String?
+  state          String?     @db.Char(2)
+  postalCode     String?     @map("postal_code") @db.VarChar(8)
+  timezone       String      @default("America/Sao_Paulo")
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  storeMemberships StoreMembership[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId])
+  @@map("stores")
+}
+
+/// Acesso de um membro do operador a uma unidade específica.
+/// As FKs compostas garantem que loja e membro pertencem ao mesmo operador.
+model StoreMembership {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @map("organization_id") @db.Uuid
+  storeId        String         @map("store_id") @db.Uuid
+  userId         String         @map("user_id") @db.Uuid
+  role           MembershipRole
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  store        Store        @relation(fields: [storeId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  membership   Membership   @relation(fields: [userId, organizationId], references: [userId, organizationId], onDelete: Cascade)
+
+  @@unique([storeId, userId])
+  @@index([organizationId, userId])
+  @@map("store_memberships")
+}
+
+/// Refresh tokens rotativos. Cada login inicia uma família; reutilizar um
+/// token já rotacionado revoga a família inteira.
+model RefreshToken {
+  id             String    @id @default(uuid()) @db.Uuid
+  familyId       String    @map("family_id") @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  organizationId String?   @map("organization_id") @db.Uuid
+  tokenHash      String    @map("token_hash") @db.Char(64)
+  expiresAt      DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt      DateTime? @map("revoked_at") @db.Timestamptz(6)
+  replacedById   String?   @map("replaced_by_id") @db.Uuid
+  userAgent      String?   @map("user_agent")
+  ip             String?
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([familyId])
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+/// Trilha de auditoria imutável (UPDATE/DELETE bloqueados por trigger).
+model AuditLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  actorId        String?  @map("actor_id") @db.Uuid
+  organizationId String?  @map("organization_id") @db.Uuid
+  action         String
+  entityType     String?  @map("entity_type")
+  entityId       String?  @map("entity_id") @db.Uuid
+  metadata       Json?
+  ip             String?
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([organizationId, createdAt])
+  @@map("audit_logs")
+}
